@@ -119,51 +119,65 @@ async def admit(draw: Draw | None) -> Draw | None:
     return replace(draw, refused_until=max(lock.until for lock in locked))
 
 
-async def outbound(draw: Draw | None, org_id: int | None) -> None:
-    """At the point a drawing call would leave: refuse it while its allowance is locked, then spend
-    its units from the team's daily share and refuse it once that is spent. `observe` logs both
-    refusals instead. A share the store cannot answer admits: the lock still guards the pool."""
-    if draw is None:
+def refuse_if_locked(draw: Draw | None) -> None:
+    """Before a drawing call leaves: refuse it while its allowance is locked (`enforce`), or log
+    what enforcing would refuse (`observe`)."""
+    if draw is None or not draw.refused:
         return
-    if draw.refused:
-        if mode() == "enforce":
-            raise exhausted(draw)
-        capacity_events.emit("allowance_would_refuse", provider=draw.service, key=draw.key,
-                             until=draw.refused_until)
-    share = get_settings().allowance_share(draw.service, org_id) if org_id else None
+    if mode() == "enforce":
+        raise exhausted(draw)
+    capacity_events.emit("allowance_would_refuse", provider=draw.service, key=draw.key,
+                         until=draw.refused_until)
+
+
+async def spend_share(draw: Draw | None, org_id: int | None) -> None:
+    """Immediately before a drawing call is sent: spend its units from the team's daily share of
+    the provider's allowance, or refuse it once that is spent. `observe` counts exactly as
+    `enforce` would and logs the refusal instead. A call the lock refused, and the probe, spend
+    nothing. A share the store cannot answer admits: the lock still guards the pool."""
+    if draw is None or draw.refused or draw.probe_lock_id is not None or not org_id:
+        return
+    share = get_settings().allowance_share(draw.service, org_id)
     if share is None:
         return
     now = utcnow_naive()
-    enforce = mode() == "enforce"
-    key = f"{SHARE_NS}{draw.key}:{org_id}:{capacity_signatures.pacific_day(now).isoformat()}"
+    day = capacity_signatures.pacific_day(now).isoformat()
     store = kv.store()
-    taken = await store.take_units(key, draw.units, share, SHARE_TTL_S, enforce=enforce)
+    taken = await store.take_units(f"{SHARE_NS}{draw.service}:{org_id}:{day}", draw.units, share,
+                                   SHARE_TTL_S, enforce=True)
     if taken is None:
         return
     admitted, used = taken
-    before = used - draw.units if admitted else used
-    for pct in (100, 50):
-        if before * 100 < share * pct <= used * 100 or (not admitted and pct == 100):
-            capacity_events.emit("allowance_share", provider=draw.service, key=draw.key,
-                                 org_id=org_id, share=share, used=used, crossed=pct,
-                                 refused=not admitted)
-            break
-    if not admitted:
-        raise share_spent(draw, share, used, capacity_signatures.next_pacific_midnight(now))
+    where = {"provider": draw.service, "org_id": org_id, "share": share, "units": draw.units}
+    if admitted:
+        crossed = next((pct for pct in (100, 50)
+                        if (used - draw.units) * 100 < share * pct <= used * 100), None)
+        if crossed is not None:
+            capacity_events.emit("allowance_share", **where, used=used, crossed=crossed)
+        return
+    capacity_events.emit("allowance_share_refused", **where, used=used,
+                         would_refuse=mode() != "enforce")
+    if mode() == "enforce":
+        raise share_spent(draw, share, used, capacity_signatures.next_pacific_midnight(now), now)
 
 
-def share_spent(draw: Draw, share: int, used: int, resets: datetime) -> CallFailure:
+def share_spent(draw: Draw, share: int, used: int, resets: datetime,
+                now: datetime) -> CallFailure:
     provider = oauth_providers.get(draw.service)
     name = provider.display_name if provider else draw.service
+    own = f"A connection made with your own {_own_credential(provider)} has no team share."
+    if draw.units > share:
+        message = (f"This {name} call needs {draw.units} units, more than your team's whole daily "
+                   f"share of {share} on treg's app; it can never fit. Not charged. {own}")
+    else:
+        message = (f"Your team has used {used} of its {share} daily units of {name}'s allowance on "
+                   f"treg's app, which every team's connection shares; this call needs "
+                   f"{draw.units}. It resets at {resets.isoformat()}Z. Not charged. {own}")
     return CallFailure("shared_allowance_share", status_code=429, detail={
         "error": "shared_allowance_share_exceeded", "provider": draw.service, "share": share,
         "used": used, "units": draw.units, "resets_at": resets.isoformat() + "Z",
-        "message": (
-            f"Your team has used {used} of its {share} daily units of {name}'s allowance on treg's "
-            f"app, which every team's connection shares; this call needs {draw.units}. It resets "
-            f"at {resets.isoformat()}Z. Not charged. A connection made with your own "
-            f"{_own_credential(provider)} has no team share."),
-    })
+        "message": message,
+    }, retry_after_s=None if draw.units > share else max(1, int((resets - now).total_seconds())))
 
 
 def exhausted(draw: Draw) -> ResolutionFailed:

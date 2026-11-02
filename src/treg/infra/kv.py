@@ -269,36 +269,37 @@ class LocalStore:
 
     def __init__(self) -> None:
         self._windows: dict[str, tuple[float, int]] = {}
+        self._units: dict[str, tuple[float, int]] = {}
 
     async def take(self, key: str, limit: int, ttl_s: int) -> bool:
-        now = time.monotonic()
-        expires, count = self._windows.get(key, (0.0, 0))
-        if expires <= now:
-            if len(self._windows) >= _LOCAL_MAX_KEYS:
-                self._evict(now)
-            expires, count = now + ttl_s, 0
-        count += 1
-        self._windows[key] = (expires, count)
+        _, count = self._spend(self._windows, key, 1, limit, ttl_s, enforce=False)
         return count <= limit
 
     async def take_units(self, key: str, units: int, limit: int, ttl_s: int, *,
                          enforce: bool) -> tuple[bool, int] | None:
+        return self._spend(self._units, key, units, limit, ttl_s, enforce=enforce)
+
+    @staticmethod
+    def _spend(windows: dict[str, tuple[float, int]], key: str, units: int, limit: int,
+               ttl_s: int, *, enforce: bool) -> tuple[bool, int]:
         now = time.monotonic()
-        expires, used = self._windows.get(key, (0.0, 0))
+        expires, used = windows.get(key, (0.0, 0))
         if expires <= now:
-            if len(self._windows) >= _LOCAL_MAX_KEYS:
-                self._evict(now)
+            if len(windows) >= _LOCAL_MAX_KEYS:
+                LocalStore._evict(windows, now)
             expires, used = now + ttl_s, 0
         if enforce and used + units > limit:
             return False, used
-        self._windows[key] = (expires, used + units)
+        windows[key] = (expires, used + units)
         return True, used + units
 
-    def _evict(self, now: float) -> None:
-        live = {k: v for k, v in self._windows.items() if v[0] > now}
+    @staticmethod
+    def _evict(windows: dict[str, tuple[float, int]], now: float) -> None:
+        live = {k: v for k, v in windows.items() if v[0] > now}
         if len(live) >= _LOCAL_MAX_KEYS:
             live = dict(sorted(live.items(), key=lambda kv: kv[1][0])[_LOCAL_MAX_KEYS // 2:])
-        self._windows = live
+        windows.clear()
+        windows.update(live)
 
     async def ping(self) -> bool:
         return True
@@ -319,6 +320,7 @@ class LocalStore:
 
     async def aclose(self) -> None:
         self._windows.clear()
+        self._units.clear()
 
     async def acquire_slot(self, key: str, token: str, ttl_ms: int, limit: int) -> AcquireResult:
         return "unavailable"

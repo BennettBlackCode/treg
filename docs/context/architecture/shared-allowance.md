@@ -95,22 +95,28 @@ The lock covers the time after the provider has already said no. Before that, on
 spend the whole day, so each team may also have a daily share of the pool.
 
 `TREG_SHARED_ALLOWANCE_SHARES` is JSON, `{"<service>": {"daily": n, "orgs": {"<org id>": n}}}`,
-validated at boot; a service missing from it has no share. Units are the provider's own:
+validated at boot against the services that declare a shared allowance
+(`config.SHARED_ALLOWANCE_SERVICES`, kept in step with the registry by a test); a service missing
+from it has no share. A share is per service, however many of treg's accounts serve it. Units are the provider's own:
 `SharedAllowance.units` prices a call by the first `(call_regex, units)` over
 "METHOD /upstream/path", else one. YouTube's follow Google's cost table; Google Ads counts one
 per request (a mutate with several operations counts once, an undercount accepted for now).
 
-`allowance.outbound` spends a call's units at the point it would leave: after the archive lookup
-(an archived answer spends nothing) and after the lock check (a refused call spends nothing). One
-Lua operation in the shared store (`kv.take_units`, key
-`treg:allowance-share:v1:<allowance key>:<org id>:<Pacific day>`, two-day expiry) refuses a spend
-past the share without spending it. The day is the Pacific calendar day, the provider's own reset.
+`allowance.spend_share` spends a call's units in the relay's `before_outbound` hook, immediately
+before the request is sent: after the archive lookup, the lock, fair share, the org/endpoint
+allowance and the relay's own checks, so a call refused by any of them, or answered from the
+archive, spends nothing. The probe spends nothing either, so a team out of share cannot hold back
+everyone's recovery. One Lua operation in the shared store (`kv.take_units`, key
+`treg:allowance-share:v1:<service>:<org id>:<Pacific day>`, two-day expiry) refuses a spend past
+the share without spending it. The day is the Pacific calendar day, the provider's own reset.
 Without `TREG_KV_URL` the per-process fallback counts per process. A store that cannot answer
 admits the call; the lock still guards the pool. Shares may add up to more than the pool: a share
 bounds one team, it promises no team its units.
 
 A refused call gets a 429 of kind `shared_allowance_share`, body error
 `shared_allowance_share_exceeded` (`provider`, `share`, `used`, `units`, `resets_at`, a `message`
-naming the team's own client or credential), not charged, audited `refused_by=cap`. A capacity
-line `allowance_share` marks a team crossing half and all of its share (and each refusal), for
-calibrating the numbers. `observe` spends shares and logs, refusing nothing.
+naming the team's own client or credential), `Retry-After` until the reset, not charged, audited
+`refused_by=cap`. A call needing more units than the whole share is told it can never fit, with no
+`Retry-After`. Capacity lines calibrate the numbers: `allowance_share` when a team crosses half and
+all of its share, `allowance_share_refused` on each refusal. `observe` counts exactly as `enforce`
+would (a refused spend is not spent) and logs the refusal with `would_refuse` instead of refusing.

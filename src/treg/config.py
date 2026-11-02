@@ -81,6 +81,11 @@ def _parse_platform_pools(raw: str) -> dict[str, dict[str, dict[str, str]]]:
     return pools
 
 
+# The services whose OAuthProvider declares a `shared_allowance` (a test keeps them in step); a
+# share named for any other service would silently never apply.
+SHARED_ALLOWANCE_SERVICES = frozenset({"google-ads", "youtube"})
+
+
 @lru_cache(maxsize=4)
 def _parse_allowance_shares(raw: str) -> dict[str, dict]:
     if not raw.strip():
@@ -95,17 +100,18 @@ def _parse_allowance_shares(raw: str) -> dict[str, dict]:
         raise error
     shares = {}
     for service, rule in parsed.items():
+        if service not in SHARED_ALLOWANCE_SERVICES:
+            raise ValueError(f"shared_allowance_shares names {service!r}, which has no shared "
+                             f"allowance; known: {', '.join(sorted(SHARED_ALLOWANCE_SERVICES))}")
         if not isinstance(rule, dict) or set(rule) - {"daily", "orgs"}:
             raise error
         daily, orgs = rule.get("daily"), rule.get("orgs", {})
         if type(daily) is not int or daily <= 0 or not isinstance(orgs, dict):
             raise error
-        try:
-            overrides = {int(org): n for org, n in orgs.items()}
-        except ValueError:
-            raise error from None
-        if not all(type(n) is int and n > 0 for n in overrides.values()):
+        if not all(re.fullmatch(r"[1-9][0-9]*", org) and type(n) is int and n > 0
+                   for org, n in orgs.items()):
             raise error
+        overrides = {int(org): n for org, n in orgs.items()}
         shares[service] = {"daily": daily, "orgs": overrides}
     return shares
 

@@ -123,15 +123,16 @@ _DATAPLANE_DERIVED_WRITES = {
     ),
     # Observe mode for a shared rate window: a platform call about to go upstream takes a
     # self-expiring member of its bucket's window (Redis, after the DB phase ended); nothing refuses.
-    # A drawing call spends its units from the team's daily share of treg's app allowance
-    # (Redis, after the DB phase ended, at the point the call would leave).
-    "shared_allowance_share": (
-        (allowance.outbound, "store.take_units"),
-    ),
     "provider_rate_window": (
         (service._execute_call, "rate_observe.observe"),
         (rate_observe.observe, "provider_rate.admit"),
         (provider_rate.admit, "store.acquire_slot"),
+    ),
+    # A drawing call spends its units from the team's daily share of treg's app allowance (Redis,
+    # after the DB phase ended, in the relay's hook immediately before the request is sent).
+    "shared_allowance_share": (
+        (service._execute_call, "allowance.spend_share"),
+        (allowance.spend_share, "store.take_units"),
     ),
 }
 _EXPECTED_DATAPLANE_WRITES = frozenset({
@@ -232,7 +233,7 @@ _EXPECTED_DERIVED_WRITE_SITES = {
     ("application/call/settle.py", "_record_first_call", "adsconv.queue"),
     ("application/call/allowance.py", "_strike", "capacity_marks.strike"),
     ("application/call/allowance.py", "_recover", "capacity_marks.clear"),
-    ("application/call/allowance.py", "outbound", "store.take_units"),
+    ("application/call/allowance.py", "spend_share", "store.take_units"),
     ("application/call/settle.py", "_note_capacity_signal", "capacity_marks.strike"),
     ("application/call/settle.py", "_note_capacity_recovery", "capacity_marks.clear"),
     ("application/call/settle.py", "_note_capacity_recovery", "capacity_marks.clear_sweep_state"),

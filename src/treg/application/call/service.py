@@ -1457,7 +1457,7 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                 archive_key_hash, archive_content_hash = served["key_hash"], served["content_hash"]
                 response = _served_response(served, body)
             else:
-                await allowance.outbound(allowance_draw, caller.org_id)
+                allowance.refuse_if_locked(allowance_draw)
                 if platform_tier and (cap := capacity_view.concurrency(mk.provider)) \
                         and (wait_s := get_settings().fair_share_wait_s) > 0:
                     # Fair share (domain/capacity/fair_share.py): every team shares this account's
@@ -1480,10 +1480,13 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                         smoothed.append(f"share_wait={share_slot.waited_ms}")
                 rate_seen = None
                 relay_options = {}
-                if mk is not None and _quota_targets(request, mk.endpoint_id):
+                quota_targets = mk is not None and _quota_targets(request, mk.endpoint_id)
+                if quota_targets or allowance_draw is not None:
                     async def before_outbound():
                         nonlocal sent, rate_seen
-                        await _admit_org_endpoint(request, mk.endpoint_id)
+                        if quota_targets:
+                            await _admit_org_endpoint(request, mk.endpoint_id)
+                        await allowance.spend_share(allowance_draw, caller.org_id)
                         rate_seen = await rate_observe.observe(mk.provider, rl) if platform_tier else None
                         sent = True
 

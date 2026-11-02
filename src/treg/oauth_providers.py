@@ -802,7 +802,9 @@ YOUTUBE = OAuthProvider(
         AllowanceScope("writes", r"^(?:POST|PUT|PATCH|DELETE) "),
     ), units=(
         (r"^POST /(?:upload/)?youtube/v3/videos/*$", 1),
-        (r"^(?:POST|PUT) /(?:upload/)?youtube/v3/captions", 400),
+        (r"^POST /(?:upload/)?youtube/v3/captions", 400),
+        (r"^PUT /(?:upload/)?youtube/v3/captions", 450),
+        (r"^GET /youtube/v3/captions/[^/]+", 200),
         (r"^GET /youtube/v3/captions", 50),
         (r"^(?:POST|PUT|PATCH|DELETE) ", 50),
     )),

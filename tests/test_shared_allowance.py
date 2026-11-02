@@ -375,6 +375,9 @@ async def test_observe_spends_the_share_but_refuses_nothing(
         assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 200
     crossed = [(e["crossed"], e["used"]) for e in events if e["event"] == "allowance_share"]
     assert crossed == [(50, 1), (100, 2)]
+    refused = [(e["used"], e["would_refuse"]) for e in events
+               if e["event"] == "allowance_share_refused"]
+    assert refused == [(2, True), (2, True)], "counted exactly as enforce would, refusing nothing"
 
 
 def test_youtube_calls_are_priced_in_its_own_units():
@@ -383,18 +386,66 @@ def test_youtube_calls_are_priced_in_its_own_units():
     prices = {call: allowance.units_for(call) for call in (
         "GET /youtube/v3/channels", "GET /youtube/v3/search", "POST /upload/youtube/v3/videos",
         "PUT /youtube/v3/videos", "POST /upload/youtube/v3/thumbnails/set",
-        "POST /upload/youtube/v3/captions", "GET /youtube/v3/captions")}
+        "POST /upload/youtube/v3/captions", "PUT /upload/youtube/v3/captions",
+        "GET /youtube/v3/captions", "GET /youtube/v3/captions/abc")}
     assert prices == {"GET /youtube/v3/channels": 1, "GET /youtube/v3/search": 1,
                       "POST /upload/youtube/v3/videos": 1, "PUT /youtube/v3/videos": 50,
                       "POST /upload/youtube/v3/thumbnails/set": 50,
-                      "POST /upload/youtube/v3/captions": 400, "GET /youtube/v3/captions": 50}
+                      "POST /upload/youtube/v3/captions": 400,
+                      "PUT /upload/youtube/v3/captions": 450, "GET /youtube/v3/captions": 50,
+                      "GET /youtube/v3/captions/abc": 200}
 
 
 @pytest.mark.parametrize("raw", ['[]', '{"youtube": 5}', '{"youtube": {"daily": 0}}',
                                  '{"youtube": {"daily": 5, "orgs": {"x": 1}}}',
-                                 '{"youtube": {"daily": 5, "extra": 1}}'])
+                                 '{"youtube": {"daily": 5, "orgs": {"01": 1}}}',
+                                 '{"youtube": {"daily": 5, "orgs": {"-3": 1}}}',
+                                 '{"youtube": {"daily": 5, "extra": 1}}',
+                                 '{"googleads": {"daily": 5}}'])
 def test_a_malformed_share_setting_fails_at_boot(raw):
     from pydantic import ValidationError
     from treg.config import Settings
     with pytest.raises(ValidationError):
         Settings(shared_allowance_shares=raw)
+
+
+def test_every_shared_allowance_provider_can_be_given_a_share():
+    from treg import oauth_providers
+    from treg.config import SHARED_ALLOWANCE_SERVICES
+    assert SHARED_ALLOWANCE_SERVICES == {p.service for p in oauth_providers.REGISTRY.values()
+                                         if p.shared_allowance is not None}
+
+
+async def test_a_call_that_never_leaves_spends_no_share(
+        clients: AsyncClient, shares, upstream, monkeypatch):
+    from treg.application.call.types import GatewayFailed
+    shares({"youtube": {"daily": 1}})
+    await _connect(clients, "youtube", YT_HOST, provider="youtube")
+
+    async def refused_before_sending(*args, **kwargs):
+        raise GatewayFailed("ssrf_refused", status_code=403, detail="blocked")
+    monkeypatch.setattr(call_service, "relay", refused_before_sending)
+    for _ in range(3):
+        assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 403
+    monkeypatch.setattr(call_service, "relay", upstream.relay)
+    assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 200
+
+
+async def test_the_probe_spends_no_share_and_a_call_too_big_for_any_share_says_so(
+        clients: AsyncClient, shares, upstream):
+    shares({"youtube": {"daily": 300}})
+    await _connect(clients, "youtube", YT_HOST, provider="youtube")
+    r = await clients.post("/call/youtube/upload/youtube/v3/captions?part=snippet", json={})
+    assert r.status_code == 429
+    assert "can never fit" in r.json()["detail"]["message"] and "Retry-After" not in r.headers
+
+    upstream.answer = (403, YT_QUOTA)
+    for _ in range(2):
+        await clients.get("/call/youtube/youtube/v3/channels?part=id")
+    capacity_marks._last_probe.clear()
+    upstream.answer = (200, b'{"items": []}')
+    shares({"youtube": {"daily": 2}})  # the two failed calls spent it
+    assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 200
+    assert await _lock("allowance:youtube") is None, "the probe went out despite the spent share"
+    r = await clients.get("/call/youtube/youtube/v3/channels?part=id")
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
