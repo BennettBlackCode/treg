@@ -1514,6 +1514,58 @@ def test_login_ignores_a_malformed_ad_link_file(monkeypatch, tmp_path):
     assert opened and "ad=" not in opened[0]
 
 
+def _browser_login(monkeypatch, tmp_path, poll):
+    """`cmd_login`'s browser door against a fake registry; `poll` answers each /auth/cli/poll."""
+    import httpx
+
+    class Resp:
+        def __init__(self, payload, status_code=200):
+            self._payload, self.status_code, self.cookies = payload, status_code, {}
+
+        def json(self):
+            return self._payload
+
+    starts: list[str] = []
+    monkeypatch.setattr(cli, "CONFIG_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: None)
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: starts.append(url) or Resp({"login_id": "L" * 24, "code": "ABCD"}))
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: Resp(*poll()))
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cli, "_pin_token_to_active_org", lambda cfg, **kw: None)
+    monkeypatch.setattr(cli, "_maybe_offer_onboarding", lambda cfg: None)
+    return starts
+
+
+def test_an_agent_login_returns_while_pending_and_the_next_one_finishes_it(monkeypatch, tmp_path, capsys):
+    """An agent's shell is no terminal and its harness kills a command that waits minutes, so
+    `treg login` waits briefly, exits 3 with the link still open, and a rerun resumes the SAME
+    sign-in instead of minting a new one the person never saw."""
+    approved = False
+    starts = _browser_login(monkeypatch, tmp_path, lambda: (
+        ({"token": "tok", "email": "a@b.c", "active_org": "team-a"},) if approved else ({"status": "pending"},)))
+    args = type("A", (), {"token": None, "email": None})()
+
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_login(args, {"base_url": "https://treg.to", "token": None})
+    assert exc.value.code == cli.LOGIN_PENDING_EXIT
+    assert "run `treg login` again" in capsys.readouterr().out
+    pending = tmp_path / "pending-login.json"
+    assert pending.stat().st_mode & 0o777 == 0o600
+
+    approved = True
+    cfg = {"base_url": "https://treg.to", "token": None}
+    cli.cmd_login(args, cfg)
+    assert len(starts) == 1 and cfg["token"] == "tok" and not pending.exists()
+    assert "L" * 24 in capsys.readouterr().out
+
+
+def test_a_sign_in_the_server_forgot_times_out_and_is_dropped(monkeypatch, tmp_path):
+    _browser_login(monkeypatch, tmp_path, lambda: ({"detail": "this login has expired"}, 400))
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_login(type("A", (), {"token": None, "email": None})(), {"base_url": "https://treg.to", "token": None})
+    assert "timed out" in str(exc.value.code) and not (tmp_path / "pending-login.json").exists()
+
+
 def test_a_misspelled_call_option_is_answered_with_its_real_name(monkeypatch, capsys):
     monkeypatch.setattr(cli.cli_analytics, "track_command", lambda **kw: None)
     with pytest.raises(SystemExit) as exc:

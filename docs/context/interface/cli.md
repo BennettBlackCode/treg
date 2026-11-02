@@ -311,7 +311,13 @@ Bare **`treg connections`** now lists (the subparser is `required=False` with a 
   `/auth/cli/poll` **with no
   code**; the poll result may carry `active_org` = the team picked in the browser, which `cmd_login` adopts
   directly, falling back to `_pick_active_org` only against an older server (where `/start` 404s → a
-  locally-minted `login_id`, no code)),
+  locally-minted `login_id`, no code)). The started handshake is saved to `pending-login.json` next
+  to the config (`0600`: its `login_id` collects the token) for a little under the server's ten-minute
+  handshake life. A terminal waits that whole time; a shell that is not a terminal (an agent's, whose
+  harness kills long commands) waits `AGENT_LOGIN_WAIT` seconds, enough for a one-click reuse of a
+  dashboard session, then exits `LOGIN_PENDING_EXIT` (3) with the link open, and the next `treg login`
+  resumes the same handshake instead of starting one the person never saw (`--wait` keeps waiting). A
+  poll the server answers 400 (expired) drops the file,
   `login --email you@x.com` (email OTP from the terminal: `POST /auth/email/start` →
   prompts for the 6-digit code → `/auth/email/verify`, storing the identity token; a server that
   requires a browser check answers 400 with `X-Treg-Captcha: required`, and the CLI says so and

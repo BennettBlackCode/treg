@@ -607,8 +607,105 @@ def cmd_login(args, cfg) -> None:
             return
     # Browser handshake (register-or-login) — the /login page reuses an existing dashboard
     # session with one click, else offers every configured door (GitHub / Google / email code).
-    import secrets as _secrets
     base = cfg["base_url"].rstrip("/")
+    pending = _pending_login(base)
+    if pending is None:
+        pending = _start_cli_login(base)
+        print(f"Opening your browser to sign in…\nIf it doesn't open, visit:\n  {pending['url']}\n", flush=True)
+        opened = True
+    else:
+        print(f"Sign-in already started; visit:\n  {pending['url']}\n", flush=True)
+        opened = False
+    if code := pending.get("code"):
+        print(f"  The sign-in page shows this code — check it matches:  {_B}{_TEAL}{code}{_R}\n", flush=True)
+    # A person at a terminal waits for the whole handshake. An agent's shell is not a terminal, and
+    # agent harnesses kill a command that runs for minutes, so it waits briefly (enough for a
+    # one-click "Continue as") and leaves the handshake for the next `treg login` to finish.
+    remaining = max(0, int(pending["expires"] - time.time()))
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    wait = remaining if interactive or getattr(args, "wait", False) else min(remaining, AGENT_LOGIN_WAIT)
+    print("Waiting for authorization…", flush=True)
+    if opened:
+        try:
+            webbrowser.open(pending["url"])
+        except Exception:  # noqa: BLE001 - optional extras; the treg skill already installed
+            pass
+    for _ in range(wait):
+        time.sleep(1)
+        try:
+            r = httpx.get(f"{base}/auth/cli/poll", params={"login_id": pending["login_id"]},
+                          headers={"ngrok-skip-browser-warning": "1"}, timeout=10)
+        except Exception:  # noqa: BLE001
+            continue
+        if r.status_code == 400:  # the server forgot this handshake: expired or refused
+            break
+        try:
+            d = r.json()
+        except ValueError:
+            continue
+        if d.get("token"):
+            cfg.update(token=d["token"], email=d.get("email"), identity=True)
+            if d.get("active_org"):
+                cfg["active_org"] = d["active_org"]  # the team the user picked in the browser
+            _save_config(cfg)  # persist first; the login_id is single-use, don't risk losing it
+            _forget_pending_login()
+            if pending.get("ad"):
+                _forget_ad_link()
+            if not cfg.get("active_org"):
+                _pick_active_org(cfg)  # older server (no picker) — falls back to guessing, and pins
+            else:
+                # The browser picker already named the team, so `_pick_active_org` is skipped — and
+                # with it the pin. Pin here too, or the token this path stores works only inside the
+                # CLI (which supplies X-Treg-Org itself) and fails everywhere it gets pasted.
+                _pin_token_to_active_org(cfg)
+            print(f"✓ Logged in as {cfg['email']}. Active org: {cfg.get('active_org')}")
+            _maybe_offer_onboarding(cfg)
+            return
+    else:
+        if wait < remaining:
+            minutes = max(1, (remaining - wait) // 60)
+            print(f"Not signed in yet. A person has to open the link above and approve it; the link "
+                  f"works for about {minutes} more minute{'s' if minutes > 1 else ''}. Then run "
+                  f"`treg login` again to finish (it picks up this sign-in, it does not start a new one).",
+                  flush=True)
+            raise SystemExit(LOGIN_PENDING_EXIT)
+    _forget_pending_login()
+    sys.exit("Login timed out — run `treg login` again.")
+
+
+AGENT_LOGIN_WAIT = 20  # seconds a non-terminal `treg login` waits before leaving the handshake open
+LOGIN_PENDING_EXIT = 3  # started, not finished; the next `treg login` resumes it, as `call --await` does
+_LOGIN_TTL = 590  # a little under how long the server keeps a started sign-in (ten minutes)
+
+
+def _pending_login_path() -> Path:
+    return CONFIG_PATH.parent / "pending-login.json"
+
+
+def _pending_login(base: str) -> dict | None:
+    """The sign-in an earlier `treg login` started against this registry and that can still finish."""
+    try:
+        pending = json.loads(_pending_login_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(pending, dict) or pending.get("base") != base \
+            or not isinstance(pending.get("expires"), (int, float)) or pending["expires"] <= time.time() \
+            or not isinstance(pending.get("login_id"), str) or not isinstance(pending.get("url"), str):
+        return None
+    return pending
+
+
+def _forget_pending_login() -> None:
+    try:
+        _pending_login_path().unlink()
+    except OSError:
+        pass
+
+
+def _start_cli_login(base: str) -> dict:
+    """Start a browser sign-in and remember it, so a `treg login` that stops waiting can be resumed.
+    The login_id fetches the token once approved, so the file is private like the config."""
+    import secrets as _secrets
     # Ask the SERVER to start the login: it mints the login_id AND a short pairing code. The browser
     # must echo the code back before it finishes, so a login you didn't start — someone mailing you a
     # /login?cli=… link — can't be approved into a token for them. If the server is too old to know
@@ -640,41 +737,18 @@ def cmd_login(args, cfg) -> None:
     # type it. The server still validates the code at approve time — the guard itself is unchanged.
     ad_link = _pending_ad_link()
     url = f"{base}/login?cli={lid}" + (f"&ad={ad_link}" if ad_link else "") + (f"#code={code}" if code else "")
-    # flush=True for non-TTY agent shells where stdout is block-buffered — the pairing code must
-    # appear immediately so an agent driving a browser can see and verify it.
-    print(f"Opening your browser to sign in…\nIf it doesn't open, visit:\n  {url}\n", flush=True)
-    if code:
-        print(f"  The sign-in page shows this code — check it matches:  {_B}{_TEAL}{code}{_R}\n", flush=True)
-    print("Waiting for authorization…", flush=True)
+    pending = {"base": base, "login_id": lid, "code": code, "url": url, "ad": ad_link,
+               "expires": time.time() + _LOGIN_TTL}
+    path = _pending_login_path()
     try:
-        webbrowser.open(url)
-    except Exception:  # noqa: BLE001 - optional extras; the treg skill already installed
-        pass
-    for _ in range(180):  # ~3 min
-        time.sleep(1)
-        try:
-            d = httpx.get(f"{base}/auth/cli/poll",
-                          params={"login_id": lid}, headers={"ngrok-skip-browser-warning": "1"}, timeout=10).json()
-        except Exception:  # noqa: BLE001
-            continue
-        if d.get("token"):
-            cfg.update(token=d["token"], email=d.get("email"), identity=True)
-            if d.get("active_org"):
-                cfg["active_org"] = d["active_org"]  # the team the user picked in the browser
-            _save_config(cfg)  # persist first; the login_id is single-use, don't risk losing it
-            if ad_link:
-                _forget_ad_link()
-            if not cfg.get("active_org"):
-                _pick_active_org(cfg)  # older server (no picker) — falls back to guessing, and pins
-            else:
-                # The browser picker already named the team, so `_pick_active_org` is skipped — and
-                # with it the pin. Pin here too, or the token this path stores works only inside the
-                # CLI (which supplies X-Treg-Org itself) and fails everywhere it gets pasted.
-                _pin_token_to_active_org(cfg)
-            print(f"✓ Logged in as {cfg['email']}. Active org: {cfg.get('active_org')}")
-            _maybe_offer_onboarding(cfg)
-            return
-    sys.exit("Login timed out — run `treg login` again.")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(pending), encoding="utf-8")
+        tmp.chmod(0o600)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # this run can still finish; only a later resume is lost
+    return pending
 
 
 def cmd_logout(args, cfg) -> None:
@@ -6942,6 +7016,9 @@ def build_parser() -> argparse.ArgumentParser:
             "treg login --token <per-org-token>             # non-interactive (agents/CI)")
     lg.add_argument("--token", help="a per-org token (agents/CI) instead of the browser/email flow")
     lg.add_argument("--email", help="sign in with a one-time code emailed to this address")
+    lg.add_argument("--wait", action="store_true",
+                    help="keep waiting for the browser approval even when not run from a terminal "
+                         "(an agent's shell otherwise returns after a short wait; rerun to finish)")
     lg.set_defaults(fn=cmd_login)
 
     mk(sub, "logout", "Clear the stored credentials for this machine.",

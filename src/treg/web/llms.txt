@@ -43,7 +43,9 @@ holds those accounts and bills a fraction of a cent per call.
       treg          # check: account, team, balance, own tools, next commands
 
   Handed a token? `curl -fsSL {BASE}/install.sh | sh -s -- --token <token>` does all of it without a
-  browser. `treg login --email you@company.com` signs in with an emailed code; an invited person runs
+  browser. Run from an agent's shell, `treg login` exits 3 after a short wait with the sign-in still
+  open: pass the link to the human, then run `treg login` again to finish.
+  `treg login --email you@company.com` signs in with an emailed code; an invited person runs
   `treg accept`. Asked to share the human's own keys and skills with the team? `treg scan` shows what
   would be registered and sends nothing; register only what they approve with
   `treg upload --select <names>`.

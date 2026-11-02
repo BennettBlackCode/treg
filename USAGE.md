@@ -48,7 +48,7 @@ present a per-org token directly.
 |---|---|---|
 | `treg` | `--json` | no arguments: the registry, your account, the active team and role, its balance, its own tools, and the next commands to run (`help[]`). Every line is best-effort and it always exits 0 |
 | `treg config` | `--base-url URL` | show or set the endpoint (prints base URL, email, active org, logged-in) — use `treg org ls` for the full org list |
-| `treg login` | _(none)_ | GitHub browser sign-in (register-or-login), stores one identity token |
+| `treg login` | _(none)_ | browser sign-in (register-or-login), stores one identity token. Not run from a terminal, it waits about 20 seconds, then exits 3 with the sign-in open; the next `treg login` resumes it. `--wait` keeps waiting |
 | `treg login` | `--email EMAIL` | email one-time-code sign-in (register-or-login); prompts for the code. A server that requires a browser check finishes the sign-in in the browser instead |
 | `treg login` | `--token TOKEN` | agents/CI: use a per-org token directly |
 | `treg logout` | — | clear your stored credentials |
