@@ -221,7 +221,9 @@ pin a job to one provider (`treg org pin`), and then calls to the job's other pr
   exception: it prints the raw final response and writes progress to stderr, so keep the streams
   apart when you wait on a generation task. Run a handful and
   check the parsed results before looping over the whole list: a parse bug throws away answers that
-  were already paid for.
+  were already paid for. Exit 255 (`"stop": true` under `_treg`) means treg refused the call in a
+  way every later call meets too, such as an empty team balance or a spending limit reached: stop
+  the batch and tell the human, rather than moving on to the next item. `xargs` stops by itself on 255.
 - **Calling in parallel is fine**, within limits: treg sets no per-token or per-team concurrency
   limit, and a provider's own rate limits are relayed as they are. Where treg's own account for a
   provider is at its limit of calls in progress, a team that already has calls running on it gets

@@ -334,6 +334,14 @@ file saved with a byte-order mark (PowerShell's `>` writes UTF-16) is sent as UT
 on stderr; any other file is sent byte for byte. Pass `--content-type` to send a body exactly as
 written.
 
+Exit status: 0 for an answer below 400, 1 for any other failure, and **255** when treg refused the
+call in a way every later call meets too (the team balance is empty, a daily or tag spending limit is
+reached, the tag is blocked). The last stderr line says so, and `treg --json call` adds
+`"error": "<kind>", "stop": true` under `_treg`. POSIX `xargs` stops reading input when a command
+exits 255, so `xargs -P8 treg call ...` ends the batch by itself. A misspelled option (`--path`,
+`--body`, `-o`) is answered with its real name: parameters go in `--query`, the body in `--data`,
+and output to a file by redirecting stdout.
+
 **Agent-native (raw HTTP) form** — build the real upstream URL and prefix it; no CLI needed:
 
 ```

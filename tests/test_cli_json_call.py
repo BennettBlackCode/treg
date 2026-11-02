@@ -75,3 +75,36 @@ def test_json_and_org_flags_last_one_invocation(monkeypatch, capsys):
     _serve(monkeypatch, _charged(json={"items": []}))
     cli.main(["call", "treg.people.search"])
     assert json.loads(capsys.readouterr().out) == {"items": []}
+
+
+def _refused(kind, **headers):
+    return httpx.Response(402, headers={"X-Treg-Error": "1", "X-Treg-Call-Id": "abc123", **headers},
+                          json={"detail": {"error": kind, "message": "no"}})
+
+
+def test_a_refusal_every_later_call_meets_exits_255_so_xargs_stops(monkeypatch, capsys):
+    _serve(monkeypatch, _refused("insufficient_balance"))
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["call", "treg.people.search"])
+    assert exc.value.code == cli.STOP_EXIT == 255
+    assert "stop the batch" in capsys.readouterr().err.splitlines()[-1]
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--json", "call", "treg.people.search"])
+    out, err = capsys.readouterr()
+    assert exc.value.code == 255 and err == ""
+    meta = json.loads(out)["_treg"]
+    assert meta["error"] == "insufficient_balance" and meta["stop"] is True
+
+
+@pytest.mark.parametrize("response", [
+    _refused("route_max_cost"),                                       # this call only
+    _refused("insufficient_balance", **{"X-Treg-Idempotent-Replay": "1"}),  # a stored answer
+    httpx.Response(402, json={"detail": {"error": "insufficient_balance"}}),  # the provider's 402
+])
+def test_other_failures_keep_exit_1(monkeypatch, capsys, response):
+    _serve(monkeypatch, response)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--json", "call", "treg.people.search"])
+    assert exc.value.code == 1
+    assert "stop" not in json.loads(capsys.readouterr().out)["_treg"]

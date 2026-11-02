@@ -154,8 +154,16 @@ emit raw JSON instead — one stable contract for agents. On `call` (not `--awai
 compact envelope, `{"result": <body>, "_treg": {http_status, call_id, charged_micro | reserved_micro,
 replay?, async?, hint?, treg_saturated?, retry_after_seconds?}}` (`_call_envelope`; text as a
 string, binary as base64), and suppresses the charge, hint and failure-diagnostic stderr lines: a
-script that merged the streams once discarded every result it had paid for. Exit status is
-unchanged (1 on HTTP >= 400).
+script that merged the streams once discarded every result it had paid for. Exit status is 1 on
+HTTP >= 400, except **255** for treg's own refusals that every later call meets too
+(`capacity_notice.STOP_REFUSALS`: `insufficient_balance`, `platform_daily_cap_reached`,
+`tag_spend_cap_reached`, `tag_call_cap_reached`, `tag_blocked`; a replay never counts). POSIX `xargs`
+stops on 255, so the batches agents write end by themselves instead of turning the rest of the list
+into refusals. Such a refusal adds `"error", "stop": true` to the envelope, and outside `--json` a
+last stderr line saying what lifts it. After argparse's error, an unknown `treg call` option it
+recognises (`--path`, `--path-params`, `--body`, `-d`, `-o`, ...) gets one line naming the real one
+(`_CALL_OPTION_HINTS`). The `catalog get` params table labels a catalog id's path parameters `query`,
+because that is how the CLI sends them.
 The failure-diagnostic line names whose answer a 4xx/5xx is from `X-Treg-Error`. treg's
 saturation 503 carries no `X-Treg-Error` (see [api](api.md)), so the CLI reads its typed
 `treg_saturated` body instead; a client that only checks the header blames the provider.
