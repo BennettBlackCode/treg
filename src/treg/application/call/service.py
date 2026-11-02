@@ -1457,8 +1457,7 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                 archive_key_hash, archive_content_hash = served["key_hash"], served["content_hash"]
                 response = _served_response(served, body)
             else:
-                if allowance_draw is not None and allowance_draw.refused:
-                    allowance.refuse(allowance_draw)
+                await allowance.outbound(allowance_draw, caller.org_id)
                 if platform_tier and (cap := capacity_view.concurrency(mk.provider)) \
                         and (wait_s := get_settings().fair_share_wait_s) > 0:
                     # Fair share (domain/capacity/fair_share.py): every team shares this account's
@@ -1653,7 +1652,8 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
         _renderings = _safe_secret_renderings(tool, secrets)
         _audit(exc.status_code, charged_micro=0 if metered or free_poll else None,
                refused_by=("policy" if exc.kind in routed._QUOTA_REFUSALS
-                           else "capacity" if exc.kind == "provider_capacity" else None),
+                           else "capacity" if exc.kind == "provider_capacity"
+                           else "cap" if exc.kind == "shared_allowance_share" else None),
                duration_ms=_now_ms() - started, answered=False,
                error_request=(
                    _ERROR_MASKING_FAILED if _renderings is None else

@@ -23,10 +23,13 @@ from ...domain.capacity import events as capacity_events
 from ...domain.capacity import marks as capacity_marks
 from ...domain.capacity import signatures as capacity_signatures
 from ...domain.capacity.view import view as capacity_view
+from ...infra import kv
 from ...timeutil import utcnow_naive
-from .types import ResolutionFailed
+from .types import CallFailure, ResolutionFailed
 
 KEY_PREFIX = "allowance:"
+SHARE_NS = "treg:allowance-share:v1:"
+SHARE_TTL_S = 2 * 86400
 _SCAN_BYTES = 16 * 1024
 MAX_LOCK = timedelta(seconds=capacity_marks.LOCK_TTL_S)
 
@@ -40,6 +43,7 @@ class Draw:
     key: str
     scope_keys: tuple[str, ...]
     costly_key: str | None = None
+    units: int = 1
     probe_lock_id: str | None = None
     refused_until: datetime | None = None
 
@@ -86,7 +90,8 @@ def _draw(provider, account: str | None, method: str, upstream_url: str) -> Draw
     scopes = [scope for scope in provider.shared_allowance.scopes
               if re.search(scope.call_regex, call)]
     costly = next((f"{key}/{scope.name}" for scope in scopes if not scope.body_regex), None)
-    return Draw(provider.service, key, tuple(f"{key}/{scope.name}" for scope in scopes), costly)
+    return Draw(provider.service, key, tuple(f"{key}/{scope.name}" for scope in scopes), costly,
+                provider.shared_allowance.units_for(call))
 
 
 async def admit(draw: Draw | None) -> Draw | None:
@@ -114,13 +119,51 @@ async def admit(draw: Draw | None) -> Draw | None:
     return replace(draw, refused_until=max(lock.until for lock in locked))
 
 
-def refuse(draw: Draw) -> None:
-    """At the point a refused call would leave: raise the refusal (`enforce`), or log it (`observe`)."""
-    if mode() == "observe":
+async def outbound(draw: Draw | None, org_id: int | None) -> None:
+    """At the point a drawing call would leave: refuse it while its allowance is locked, then spend
+    its units from the team's daily share and refuse it once that is spent. `observe` logs both
+    refusals instead. A share the store cannot answer admits: the lock still guards the pool."""
+    if draw is None:
+        return
+    if draw.refused:
+        if mode() == "enforce":
+            raise exhausted(draw)
         capacity_events.emit("allowance_would_refuse", provider=draw.service, key=draw.key,
                              until=draw.refused_until)
+    share = get_settings().allowance_share(draw.service, org_id) if org_id else None
+    if share is None:
         return
-    raise exhausted(draw)
+    now = utcnow_naive()
+    enforce = mode() == "enforce"
+    key = f"{SHARE_NS}{draw.key}:{org_id}:{capacity_signatures.pacific_day(now).isoformat()}"
+    store = kv.store()
+    taken = await store.take_units(key, draw.units, share, SHARE_TTL_S, enforce=enforce)
+    if taken is None:
+        return
+    admitted, used = taken
+    before = used - draw.units if admitted else used
+    for pct in (100, 50):
+        if before * 100 < share * pct <= used * 100 or (not admitted and pct == 100):
+            capacity_events.emit("allowance_share", provider=draw.service, key=draw.key,
+                                 org_id=org_id, share=share, used=used, crossed=pct,
+                                 refused=not admitted)
+            break
+    if not admitted:
+        raise share_spent(draw, share, used, capacity_signatures.next_pacific_midnight(now))
+
+
+def share_spent(draw: Draw, share: int, used: int, resets: datetime) -> CallFailure:
+    provider = oauth_providers.get(draw.service)
+    name = provider.display_name if provider else draw.service
+    return CallFailure("shared_allowance_share", status_code=429, detail={
+        "error": "shared_allowance_share_exceeded", "provider": draw.service, "share": share,
+        "used": used, "units": draw.units, "resets_at": resets.isoformat() + "Z",
+        "message": (
+            f"Your team has used {used} of its {share} daily units of {name}'s allowance on treg's "
+            f"app, which every team's connection shares; this call needs {draw.units}. It resets "
+            f"at {resets.isoformat()}Z. Not charged. A connection made with your own "
+            f"{_own_credential(provider)} has no team share."),
+    })
 
 
 def exhausted(draw: Draw) -> ResolutionFailed:

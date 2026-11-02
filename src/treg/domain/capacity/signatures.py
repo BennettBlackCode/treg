@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
@@ -33,15 +33,19 @@ BURST_MAX_RETRY_AFTER_S = 60
 _PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
-def _next_pacific_midnight(now: datetime) -> datetime:
-    local = now.replace(tzinfo=timezone.utc).astimezone(_PACIFIC)
-    midnight = datetime.combine(local.date() + timedelta(days=1), datetime.min.time(), _PACIFIC)
+def pacific_day(now: datetime) -> date:
+    """The calendar day in Pacific time at naive-UTC `now`: the day Google's daily quotas count."""
+    return now.replace(tzinfo=timezone.utc).astimezone(_PACIFIC).date()
+
+
+def next_pacific_midnight(now: datetime) -> datetime:
+    midnight = datetime.combine(pacific_day(now) + timedelta(days=1), datetime.min.time(), _PACIFIC)
     return midnight.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 _RESETS = {
     "next_utc_midnight": lambda now: (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
-    "next_pacific_midnight": _next_pacific_midnight,
+    "next_pacific_midnight": next_pacific_midnight,
 }
 
 

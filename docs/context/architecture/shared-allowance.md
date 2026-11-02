@@ -9,7 +9,9 @@ sources:
   - src/treg/domain/capacity/marks.py
   - src/treg/domain/capacity/view.py
   - src/treg/config.py
+  - src/treg/infra/kv.py
   - tests/test_shared_allowance.py
+  - tests/test_kv.py
   - tests/test_call_architecture.py
 related:
   - ops/capacity.md
@@ -87,5 +89,28 @@ TTL. Marks are written after the answer, on their own short session, and never r
   `capacity` line `allowance_would_refuse`.
 - `enforce`: the lock refuses.
 
-The lock covers the time after the provider has already said no. Splitting the pool between
-teams before it runs out is separate work.
+## Team shares
+
+The lock covers the time after the provider has already said no. Before that, one team can still
+spend the whole day, so each team may also have a daily share of the pool.
+
+`TREG_SHARED_ALLOWANCE_SHARES` is JSON, `{"<service>": {"daily": n, "orgs": {"<org id>": n}}}`,
+validated at boot; a service missing from it has no share. Units are the provider's own:
+`SharedAllowance.units` prices a call by the first `(call_regex, units)` over
+"METHOD /upstream/path", else one. YouTube's follow Google's cost table; Google Ads counts one
+per request (a mutate with several operations counts once, an undercount accepted for now).
+
+`allowance.outbound` spends a call's units at the point it would leave: after the archive lookup
+(an archived answer spends nothing) and after the lock check (a refused call spends nothing). One
+Lua operation in the shared store (`kv.take_units`, key
+`treg:allowance-share:v1:<allowance key>:<org id>:<Pacific day>`, two-day expiry) refuses a spend
+past the share without spending it. The day is the Pacific calendar day, the provider's own reset.
+Without `TREG_KV_URL` the per-process fallback counts per process. A store that cannot answer
+admits the call; the lock still guards the pool. Shares may add up to more than the pool: a share
+bounds one team, it promises no team its units.
+
+A refused call gets a 429 of kind `shared_allowance_share`, body error
+`shared_allowance_share_exceeded` (`provider`, `share`, `used`, `units`, `resets_at`, a `message`
+naming the team's own client or credential), not charged, audited `refused_by=cap`. A capacity
+line `allowance_share` marks a team crossing half and all of its share (and each refusal), for
+calibrating the numbers. `observe` spends shares and logs, refusing nothing.

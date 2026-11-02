@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
@@ -64,9 +65,14 @@ class SharedAllowance:
     team's connection spends the same one. `drawn_by` says which calls spend it: "app" for a
     connection made through treg's own OAuth client, "platform_extra" for one carrying treg's own
     second credential (`extra_credential_setting`). A connection on the team's own client or second
-    credential draws on its own allowance and is never counted here."""
+    credential draws on its own allowance and is never counted here. `units` prices a call in the
+    provider's own units: the first `(call_regex, units)` found in "METHOD /upstream/path", else one."""
     drawn_by: str
     scopes: tuple[AllowanceScope, ...] = ()
+    units: tuple[tuple[str, int], ...] = ()
+
+    def units_for(self, call: str) -> int:
+        return next((units for regex, units in self.units if re.search(regex, call)), 1)
 
     def __post_init__(self):
         if self.drawn_by not in ("app", "platform_extra"):
@@ -794,6 +800,11 @@ YOUTUBE = OAuthProvider(
     shared_allowance=SharedAllowance(drawn_by="app", scopes=(
         AllowanceScope("search", r"^GET /youtube/v3/search/*$", r"defaultSearchListPerDayPerProject"),
         AllowanceScope("writes", r"^(?:POST|PUT|PATCH|DELETE) "),
+    ), units=(
+        (r"^POST /(?:upload/)?youtube/v3/videos/*$", 1),
+        (r"^(?:POST|PUT) /(?:upload/)?youtube/v3/captions", 400),
+        (r"^GET /youtube/v3/captions", 50),
+        (r"^(?:POST|PUT|PATCH|DELETE) ", 50),
     )),
 )
 

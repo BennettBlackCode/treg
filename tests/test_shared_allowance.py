@@ -133,7 +133,7 @@ async def test_a_spent_youtube_allowance_refuses_treg_app_connections_until_a_pr
         assert r.status_code == 403 and r.json()["error"]["errors"][0]["reason"] == "quotaExceeded"
     lock = await _lock("allowance:youtube")
     assert lock is not None and lock.is_active()
-    assert lock.until == signatures._next_pacific_midnight(lock.opened_at)
+    assert lock.until == signatures.next_pacific_midnight(lock.opened_at)
 
     relayed = len(upstream.calls)
     r = await clients.get(channels)
@@ -266,13 +266,13 @@ async def test_observe_logs_what_it_would_refuse_and_off_tracks_nothing(
 
 
 def test_youtube_resets_at_midnight_pacific_on_either_side_of_daylight_saving():
-    summer = signatures._next_pacific_midnight(datetime(2026, 10, 30, 9, 53))
-    winter = signatures._next_pacific_midnight(datetime(2026, 11, 2, 9, 0))
+    summer = signatures.next_pacific_midnight(datetime(2026, 10, 30, 9, 53))
+    winter = signatures.next_pacific_midnight(datetime(2026, 11, 2, 9, 0))
     assert summer == datetime(2026, 10, 31, 7, 0)
     assert winter == datetime(2026, 11, 3, 8, 0)
     now = utcnow_naive()
     assert signatures.classify("youtube", 403, None, YT_QUOTA, now=now).resets_at \
-        == signatures._next_pacific_midnight(now)
+        == signatures.next_pacific_midnight(now)
 
 
 async def test_a_call_probes_only_a_lock_its_answer_can_prove(
@@ -315,3 +315,86 @@ async def test_an_unreadable_capacity_view_refuses_nothing(
 
     monkeypatch.setattr(capacity_view, "load", broken)
     assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 200
+
+
+@pytest.fixture
+def shares(monkeypatch, allowance_mode):
+    def set_shares(value: dict):
+        monkeypatch.setenv("TREG_SHARED_ALLOWANCE_SHARES", json.dumps(value))
+        get_settings.cache_clear()
+    return set_shares
+
+
+async def test_a_team_past_its_daily_share_is_refused_and_its_own_client_is_not(
+        clients: AsyncClient, shares, upstream):
+    shares({"youtube": {"daily": 60}})
+    await _connect(clients, "youtube", YT_HOST, provider="youtube")
+    await _connect(clients, "youtube-own", YT_HOST, provider="")
+    write = "/call/youtube/youtube/v3/videos?part=snippet"
+
+    assert (await clients.put(write, json={})).status_code == 200            # 50 units
+    assert (await clients.get("/call/youtube/youtube/v3/videos?id=a&part=id")).status_code == 200
+    relayed = len(upstream.calls)
+    r = await clients.put(write, json={})                                    # 51 + 50 > 60
+    assert r.status_code == 429 and "X-Treg-Cost-Micro" not in r.headers
+    detail = r.json()["detail"]
+    assert detail["error"] == "shared_allowance_share_exceeded"
+    assert (detail["share"], detail["used"], detail["units"]) == (60, 51, 50)
+    assert detail["resets_at"].endswith("Z") and "own OAuth client" in detail["message"]
+    assert len(upstream.calls) == relayed, "refused before it left"
+
+    for _ in range(9):  # cheap calls still fit the rest of the share
+        assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 200
+    assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 429
+    assert (await clients.put("/call/youtube-own/youtube/v3/videos?part=snippet",
+                              json={})).status_code == 200
+
+    await audit.drain()
+    refused = [c for c in (await clients.get("/calls")).json() if c["status_code"] == 429]
+    assert {c["refused_by"] for c in refused} == {"cap"}
+
+
+async def test_an_org_override_raises_one_teams_share(clients: AsyncClient, shares, upstream):
+    org_id = (await clients.get("/orgs")).json()[0]["org_id"]
+    shares({"google-ads": {"daily": 1, "orgs": {str(org_id): 3}}})
+    await _connect(clients, "google-ads", ADS_HOST, provider="google-ads", developer_token="treg")
+    search = "/call/google-ads/v25/customers/1/googleAds:search"
+    codes = [(await clients.post(search, json={"query": "q"})).status_code for _ in range(4)]
+    assert codes == [200, 200, 200, 429]
+
+
+async def test_observe_spends_the_share_but_refuses_nothing(
+        clients: AsyncClient, shares, upstream, allowance_mode, monkeypatch):
+    events: list[dict] = []
+    monkeypatch.setattr("treg.application.call.allowance.capacity_events.emit",
+                        lambda event, **f: events.append({"event": event, **f}))
+    allowance_mode("observe")
+    shares({"youtube": {"daily": 2}})
+    await _connect(clients, "youtube", YT_HOST, provider="youtube")
+    for _ in range(4):
+        assert (await clients.get("/call/youtube/youtube/v3/channels?part=id")).status_code == 200
+    crossed = [(e["crossed"], e["used"]) for e in events if e["event"] == "allowance_share"]
+    assert crossed == [(50, 1), (100, 2)]
+
+
+def test_youtube_calls_are_priced_in_its_own_units():
+    from treg import oauth_providers
+    allowance = oauth_providers.get("youtube").shared_allowance
+    prices = {call: allowance.units_for(call) for call in (
+        "GET /youtube/v3/channels", "GET /youtube/v3/search", "POST /upload/youtube/v3/videos",
+        "PUT /youtube/v3/videos", "POST /upload/youtube/v3/thumbnails/set",
+        "POST /upload/youtube/v3/captions", "GET /youtube/v3/captions")}
+    assert prices == {"GET /youtube/v3/channels": 1, "GET /youtube/v3/search": 1,
+                      "POST /upload/youtube/v3/videos": 1, "PUT /youtube/v3/videos": 50,
+                      "POST /upload/youtube/v3/thumbnails/set": 50,
+                      "POST /upload/youtube/v3/captions": 400, "GET /youtube/v3/captions": 50}
+
+
+@pytest.mark.parametrize("raw", ['[]', '{"youtube": 5}', '{"youtube": {"daily": 0}}',
+                                 '{"youtube": {"daily": 5, "orgs": {"x": 1}}}',
+                                 '{"youtube": {"daily": 5, "extra": 1}}'])
+def test_a_malformed_share_setting_fails_at_boot(raw):
+    from pydantic import ValidationError
+    from treg.config import Settings
+    with pytest.raises(ValidationError):
+        Settings(shared_allowance_shares=raw)

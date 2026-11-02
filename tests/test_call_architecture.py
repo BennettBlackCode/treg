@@ -123,6 +123,11 @@ _DATAPLANE_DERIVED_WRITES = {
     ),
     # Observe mode for a shared rate window: a platform call about to go upstream takes a
     # self-expiring member of its bucket's window (Redis, after the DB phase ended); nothing refuses.
+    # A drawing call spends its units from the team's daily share of treg's app allowance
+    # (Redis, after the DB phase ended, at the point the call would leave).
+    "shared_allowance_share": (
+        (allowance.outbound, "store.take_units"),
+    ),
     "provider_rate_window": (
         (service._execute_call, "rate_observe.observe"),
         (rate_observe.observe, "provider_rate.admit"),
@@ -148,6 +153,7 @@ _EXPECTED_DATAPLANE_WRITES = frozenset({
     "member_daily_cap_slot",
     "provider_concurrency_lease",
     "provider_rate_window",
+    "shared_allowance_share",
 })
 _DERIVED_WRITE_FILES = {
     _SRC / "application" / "asynctasks.py": {"money_admission.admit"},
@@ -173,7 +179,9 @@ _DERIVED_WRITE_FILES = {
         "overflow_spend_ledger.reserve_in_transaction",
         "overflow_spend_ledger.release_reservation_in_transaction",
     },
-    _SRC / "application" / "call" / "allowance.py": {"capacity_marks.strike", "capacity_marks.clear"},
+    _SRC / "application" / "call" / "allowance.py": {
+        "capacity_marks.strike", "capacity_marks.clear", "store.take_units",
+    },
     _SRC / "domain" / "capacity" / "fair_share.py": {"provider_concurrency.try_acquire"},
     _SRC / "infra" / "provider_concurrency.py": {
         "store.acquire_slot", "self.store.renew_slot", "self.store.release_slot",
@@ -224,6 +232,7 @@ _EXPECTED_DERIVED_WRITE_SITES = {
     ("application/call/settle.py", "_record_first_call", "adsconv.queue"),
     ("application/call/allowance.py", "_strike", "capacity_marks.strike"),
     ("application/call/allowance.py", "_recover", "capacity_marks.clear"),
+    ("application/call/allowance.py", "outbound", "store.take_units"),
     ("application/call/settle.py", "_note_capacity_signal", "capacity_marks.strike"),
     ("application/call/settle.py", "_note_capacity_recovery", "capacity_marks.clear"),
     ("application/call/settle.py", "_note_capacity_recovery", "capacity_marks.clear_sweep_state"),

@@ -81,6 +81,35 @@ def _parse_platform_pools(raw: str) -> dict[str, dict[str, dict[str, str]]]:
     return pools
 
 
+@lru_cache(maxsize=4)
+def _parse_allowance_shares(raw: str) -> dict[str, dict]:
+    if not raw.strip():
+        return {}
+    error = ValueError('shared_allowance_shares must be {"<service>": {"daily": n, '
+                       '"orgs": {"<org id>": n}}} with positive integer units')
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        raise error from None
+    if not isinstance(parsed, dict):
+        raise error
+    shares = {}
+    for service, rule in parsed.items():
+        if not isinstance(rule, dict) or set(rule) - {"daily", "orgs"}:
+            raise error
+        daily, orgs = rule.get("daily"), rule.get("orgs", {})
+        if type(daily) is not int or daily <= 0 or not isinstance(orgs, dict):
+            raise error
+        try:
+            overrides = {int(org): n for org, n in orgs.items()}
+        except ValueError:
+            raise error from None
+        if not all(type(n) is int and n > 0 for n in overrides.values()):
+            raise error
+        shares[service] = {"daily": daily, "orgs": overrides}
+    return shares
+
+
 def platform_setting_name(provider: str) -> str:
     """The Settings attribute holding treg's own key for `provider` — the string a `platform_setting`
     binding carries, and the only form of a platform credential that ever leaves this module."""
@@ -278,6 +307,10 @@ class Settings(BaseSettings):
     # (`OAuthProvider.shared_allowance`, application/call/allowance.py): once the provider says it
     # is spent, `enforce` refuses them until it resets and `observe` only logs what it would refuse.
     shared_allowance_mode: Literal["off", "observe", "enforce"] = "off"
+    # Each team's daily share of such an allowance, in the provider's own units (JSON,
+    # TREG_SHARED_ALLOWANCE_SHARES): {"<service>": {"daily": n, "orgs": {"<org id>": n}}}. A service
+    # missing here has no share; the mode above decides whether a spent share refuses.
+    shared_allowance_shares: str = ""
 
     # Flat bounties, not a percentage of top-ups. At 0% platform margin a percentage would be a
     # permanent share of pass-through GMV, and — unlike a flat figure — it rewards farming in
@@ -938,6 +971,19 @@ class Settings(BaseSettings):
                     isinstance(k, str) and isinstance(m, str) and m.strip() for k, m in parsed.items()):
                 raise ValueError("paused_provider_messages must map service ids to non-empty strings")
         return v
+
+    @field_validator("shared_allowance_shares")
+    @classmethod
+    def _shared_allowance_shares_shape(cls, v: str) -> str:
+        _parse_allowance_shares(v)  # raises ValueError on a malformed value
+        return v
+
+    def allowance_share(self, service: str, org_id: int) -> int | None:
+        """A team's daily share of `service`'s shared allowance, or None when it has none."""
+        rule = _parse_allowance_shares(self.shared_allowance_shares).get(service)
+        if rule is None:
+            return None
+        return rule["orgs"].get(org_id, rule["daily"])
 
     @field_validator("platform_accounts")
     @classmethod

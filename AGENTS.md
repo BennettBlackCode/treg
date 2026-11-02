@@ -39,8 +39,9 @@ Everything else in this file is guidance; these are the contract, and they win o
    This temporary allowance permits calls when Redis state cannot be confirmed; it is not a durable cap.
    A connection made through treg's own OAuth client, or carrying treg's own second credential,
    spends an allowance the provider meters on treg's app (`OAuthProvider.shared_allowance`), not
-   the team's key: once the provider says that allowance is spent, a deployment may refuse such
-   calls until it resets (docs/context/architecture/shared-allowance.md). A connection on the team's own client or
+   the team's key: a deployment may give each team a daily share of it, and once the provider says
+   that allowance is spent, may refuse such calls until it resets
+   (docs/context/architecture/shared-allowance.md). A connection on the team's own client or
    credential is never counted.
 2. A hold (the balance `reserve` sets aside for one call) is settled or released exactly once, on
    every path: timeout, cancellation and exceptions included.
@@ -155,8 +156,8 @@ agents then built against a constitution that was wrong.
   credentials, catalog prices and balances, and writes only what `tests/test_call_architecture.py`
   allowlists (the ledger entries, idempotency claims, OAuth refresh, audit and telemetry, first-call
   markers, tag budgets, capacity marks, overflow spend, the member's daily-cap slot, the per-team
-  archive-question marks, durable provider-resource ownership, and Redis org/endpoint
-  quota admission counters). Extend the
+  archive-question marks, durable provider-resource ownership, Redis org/endpoint
+  quota admission counters, and teams' daily shares of treg's app allowances). Extend the
   test's allowlist in the same PR as any new write, and expect the reviewer to ask why.
 - **The tool hub** (`application/hub/`, behind `TREG_HUB_ENABLED`) runs a maker's recipe as ordinary
   calls: every step goes through `execute_call` under its own hold, a catalog step as the caller and

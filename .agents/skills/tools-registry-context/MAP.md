@@ -523,7 +523,7 @@ Regenerate via `scripts/build-map.py`.
 | `src/treg/infra/embed.py` | architecture/find.md |
 | `src/treg/infra/imaging.py` | architecture/showcase.md |
 | `src/treg/infra/judge.py` | architecture/search-experiment.md |
-| `src/treg/infra/kv.py` | architecture/data-model.md, architecture/feedback.md, architecture/org-concurrency.md, architecture/org-flow-control.md |
+| `src/treg/infra/kv.py` | architecture/data-model.md, architecture/feedback.md, architecture/org-concurrency.md, architecture/org-flow-control.md, architecture/shared-allowance.md |
 | `src/treg/infra/media_store.py` | architecture/showcase.md |
 | `src/treg/infra/money_admission.py` | architecture/data-model.md, architecture/money.md, ops/deploy.md |
 | `src/treg/infra/money_admission_reporting.py` | architecture/composition.md, architecture/data-model.md |
@@ -763,7 +763,7 @@ Regenerate via `scripts/build-map.py`.
 | `tests/test_instagram_oauth_architecture.py` | architecture/instagram-oauth.md |
 | `tests/test_key_providers.py` | architecture/auth-secrets.md |
 | `tests/test_key_spend_rollup.py` | architecture/money.md |
-| `tests/test_kv.py` | architecture/feedback.md |
+| `tests/test_kv.py` | architecture/feedback.md, architecture/shared-allowance.md |
 | `tests/test_kv_lease_diagnostics.py` | architecture/data-model.md |
 | `tests/test_marketplace_call.py` | architecture/mcp-oauth.md, architecture/money.md, architecture/proxy-model.md |
 | `tests/test_mcp.py` | architecture/mcp-oauth.md |
@@ -868,7 +868,7 @@ Regenerate via `scripts/build-map.py`.
 | `architecture/replay.md` | `__init__.py`, `__main__.py`, `records.py`, `engine.py`, `fixtures.py`, `differ.py`, `test_replay.py` |
 | `architecture/search-experiment.md` | `catalog_search.py`, `search_experiment.py`, `interleave.py`, `judge.py`, `0041_searchlog.py`, `0056_searchlog_verdict.py`, `search_experiment_report.sql`, `search_agent_bench.py`, `test_search_experiment.py`, `test_catalog_search.py`, `test_search_agent_bench.py` |
 | `architecture/shadow.md` | `shadow.py`, `shadow.py`, `0086_shadow_pairs.py`, `test_shadow.py` |
-| `architecture/shared-allowance.md` | `allowance.py`, `service.py`, `oauth_providers.py`, `signatures.py`, `marks.py`, `view.py`, `config.py`, `test_shared_allowance.py`, `test_call_architecture.py` |
+| `architecture/shared-allowance.md` | `allowance.py`, `service.py`, `oauth_providers.py`, `signatures.py`, `marks.py`, `view.py`, `config.py`, `kv.py`, `test_shared_allowance.py`, `test_kv.py`, `test_call_architecture.py` |
 | `architecture/showcase.md` | `__init__.py`, `showcase.py`, `showcase.py`, `__init__.py`, `images.py`, `images.py`, `imaging.py`, `media_store.py`, `0076_showcase_and_avatars.py`, `showcase.html`, `test_showcase_leaderboard.py`, `test_images.py` |
 | `architecture/super-admin.md` | `api.py`, `admin.py`, `evidence_retention.py`, `access.py`, `config.py` |
 | `architecture/table.md` | `__init__.py`, `table.py`, `table.py`, `call.py`, `call_surface.py`, `config.py`, `mcp_oauth.py`, `auth.py`, `auth.py`, `test_table.py`, `test_table_oauth.py` |
