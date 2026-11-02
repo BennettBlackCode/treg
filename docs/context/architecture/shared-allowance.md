@@ -105,9 +105,9 @@ from it has no share. A share is per service, however many of treg's accounts se
 per request (a mutate with several operations counts once, an undercount accepted for now).
 
 `allowance.spend_share` spends a call's units in the relay's `before_outbound` hook, immediately
-before the request is sent: after the archive lookup, the lock, fair share, the org/endpoint
-allowance and the relay's own checks, so a call refused by any of them, or answered from the
-archive, spends nothing. The probe spends nothing either, so a team out of share cannot hold back
+before the request is sent: after the archive lookup, the lock, fair share and the relay's own
+checks, so a call refused by any of them, or answered from the archive, spends nothing. It runs
+just before the org/endpoint allowance, so a call the share refuses never counts against that. The probe spends nothing either, so a team out of share cannot hold back
 everyone's recovery. One Lua operation in the shared store (`kv.take_units`, key
 `treg:allowance-share:v1:<service>:<org id>:<Pacific day>`, two-day expiry) refuses a spend past
 the share without spending it. The day is the Pacific calendar day, the provider's own reset.

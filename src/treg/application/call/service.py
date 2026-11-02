@@ -1484,9 +1484,9 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                 if quota_targets or allowance_draw is not None:
                     async def before_outbound():
                         nonlocal sent, rate_seen
+                        await allowance.spend_share(allowance_draw, caller.org_id)
                         if quota_targets:
                             await _admit_org_endpoint(request, mk.endpoint_id)
-                        await allowance.spend_share(allowance_draw, caller.org_id)
                         rate_seen = await rate_observe.observe(mk.provider, rl) if platform_tier else None
                         sent = True
 

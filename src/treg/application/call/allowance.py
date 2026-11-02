@@ -143,7 +143,7 @@ async def spend_share(draw: Draw | None, org_id: int | None) -> None:
     day = capacity_signatures.pacific_day(now).isoformat()
     store = kv.store()
     taken = await store.take_units(f"{SHARE_NS}{draw.service}:{org_id}:{day}", draw.units, share,
-                                   SHARE_TTL_S, enforce=True)
+                                   SHARE_TTL_S)
     if taken is None:
         return
     admitted, used = taken
